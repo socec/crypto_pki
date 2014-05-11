@@ -2,7 +2,7 @@
 # puk = public key
 # ca = certificate authority
 
-import time
+import time, base64
 from M2Crypto import X509, EVP, RSA, ASN1
 
 # low-level functions
@@ -132,6 +132,7 @@ def pki_encrypt_with_private_key(message, pk_file):
 	Returns encrypted message or string starting with "ERROR" in case of error.
 	"""
 	pk = RSA.load_key(pk_file) # load RSA for encryption
+	message = base64.b64encode(message)
 	try:
 		encrypted = pk.private_encrypt(message, RSA.pkcs1_padding)
 	except RSA.RSAError as e:
@@ -148,6 +149,7 @@ def pki_decrypt_with_certificate(message, cert_file):
 	puk = cert.get_pubkey().get_rsa() # get RSA for decryption
 	try:
 		decrypted = puk.public_decrypt(message, RSA.pkcs1_padding)
+		decrypted = base64.b64decode(decrypted)
 	except RSA.RSAError as e:
 		return "ERROR decrypting " + e.message
 	return decrypted
@@ -164,9 +166,13 @@ ca_cert_file = "ca_cert.pem"
 ca_pk_file = "ca_pk.pem"
 ca_puk_file = "ca_puk.pem"
 
-cert_req_file = "cert_req.pem"
-pk_file = "pk.pem"
-cert_file = "cert.pem"
+cert1_req_file = "cert1_req.pem"
+pk1_file = "pk1.pem"
+cert1_file = "cert1.pem"
+
+cert2_req_file = "cert2_req.pem"
+pk2_file = "pk2.pem"
+cert2_file = "cert2.pem"
 
 
 # first initialize CA, creating CA certificate, CA public and CA private key
@@ -174,23 +180,33 @@ pki_ca_init(ca_cert_file, ca_pk_file, ca_puk_file)
 
 # then a client can request a certificate from CA, creating certificate request and client private key
 # client also receives CA certificate and stores it locally
-pki_request_certificate_from_ca("client", cert_req_file, pk_file)
+pki_request_certificate_from_ca("client1", cert1_req_file, pk1_file)
+pki_request_certificate_from_ca("client2", cert2_req_file, pk2_file)
 
 # then CA approves and issues the certificate for client and also stores this certificate locally
-pki_ca_issue_certificate_on_request(cert_req_file, ca_pk_file, 2, cert_file)
+pki_ca_issue_certificate_on_request(cert1_req_file, ca_pk_file, 11, cert1_file)
+pki_ca_issue_certificate_on_request(cert2_req_file, ca_pk_file, 12, cert2_file)
 
 # a client can verify another client's certificate by using CA certificate
-print pki_verify_certificate(cert_file, ca_cert_file)
-
+print pki_verify_certificate(cert1_file, ca_cert_file)
+print pki_verify_certificate(cert2_file, ca_cert_file)
 
 # testing encryption and decryption
+print "original message:"
 message = "hello world"
 print message
 
 # a message can be encryted with client private key (error is reported in the response)
-crypted = pki_encrypt_with_private_key(message, pk_file)
-print crypted
+print "message encrypted by client1 private key:"
+encrypted1 = pki_encrypt_with_private_key(message, pk1_file)
+print encrypted1
 
 # a message can be decrypted with client certificate, more precisely with client public key (error is reported in the response)
-decrypted = pki_decrypt_with_certificate(crypted, cert_file)
-print decrypted
+print "message decrypted by client1 certificate:"
+decrypted1 = pki_decrypt_with_certificate(encrypted1, cert1_file)
+print decrypted1
+
+print "message decrypted by client2 certificate:"
+decrypted2 = pki_decrypt_with_certificate(encrypted1, cert2_file)
+print "client1 decrypted message"
+print decrypted2
