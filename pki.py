@@ -208,5 +208,4 @@ print decrypted1
 
 print "message decrypted by client2 certificate:"
 decrypted2 = pki_decrypt_with_certificate(encrypted1, cert2_file)
-print "client1 decrypted message"
 print decrypted2
