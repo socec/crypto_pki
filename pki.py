@@ -1,211 +1,255 @@
-# pk = private key
-# puk = public key
-# ca = certificate authority
+# http://pki-tutorial.readthedocs.org/en/latest/
+# http://sheogora.blogspot.com/2012/03/m2crypto-for-python-x509-certificates.html
 
-import time, base64
+# get "M2Crypto" from: https://pypi.python.org/pypi/M2Crypto
+# to use M2Crypto also need "setuptools" from : https://pypi.python.org/pypi/setuptools/3.6
+# to use M2Crypto also need "swig": apt-get install swig
+
+import time, base64, os
 from M2Crypto import X509, EVP, RSA, ASN1
 
-# low-level functions
-
-def pki_ca_issuer():
+def issuer_name():
 	"""
-	Our default CA issuer name.
+	CA issuer name (Distinguished Names).
+	Parameters:
+		none
+	Return:
+		X509 name of the issuer.
 	"""
 	issuer = X509.X509_Name()
-	issuer.C = "US"
-	issuer.CN = "ca_server"
+	issuer.C = "US"				# country name
+	issuer.CN = "ca_server"		# common name
 	return issuer
 
-def pki_cert_valid(cert, days=365):
+def make_request(bits, cn):
 	"""
-	Make a cert valid from now and til 'days' from now.
-	Args:
-	   cert -- cert to make valid
-	   days -- number of days cert is valid for from now.
+	Create a X509 request.
+	Parameters:
+		bits = number of bits in RSA key
+		cn = common name in request
+	Return:
+		X509 request and the private key (EVP).
 	"""
-	t = long(time.time())
-	now = ASN1.ASN1_UTCTIME()
-	now.set_time(t)
-	expire = ASN1.ASN1_UTCTIME()
-	expire.set_time(t + days * 24 * 60 * 60)
-	cert.set_not_before(now)
-	cert.set_not_after(expire)
-
-def pki_request(bits, cn='localhost'):
-	"""
-	Create a X509 request with the given number of bits in they key.
-	Args:
-	  bits -- number of RSA key bits
-	  cn -- common name in the request
-	Returns a X509 request and the private key (EVP)
-	"""
+	rsa = RSA.gen_key(bits, 65537, callback = lambda: None) # lambda to avoid user feedback
 	pk = EVP.PKey()
-	x = X509.Request()
-	rsa = RSA.gen_key(bits, 65537, lambda: None)
 	pk.assign_rsa(rsa)
-	x.set_pubkey(pk)
-	name = x.get_subject()
+	req = X509.Request()
+	req.set_pubkey(pk)
+	name = req.get_subject()
 	name.C = "US"
 	name.CN = cn
-	x.sign(pk,'sha256')
-	return x, pk
+	req.sign(pk,'sha256')
+	return req, pk
 
-def pki_cacert():
+def make_certificate_valid(cert, days):
+	"""
+	Make a certificate valid for some days from now.
+	Parameters:
+		cert = certificate to make valid
+		days = number of days cert is valid for from now
+	Return:
+		none
+	"""
+	t = long(time.time()) # get current time
+	time_now = ASN1.ASN1_UTCTIME()
+	time_now.set_time(t)
+	time_exp = ASN1.ASN1_UTCTIME()
+	time_exp.set_time(t + days * 24 * 60 * 60)
+	cert.set_not_before(time_now)
+	cert.set_not_after(time_exp)
+
+def make_ca_certificate(bits):
 	"""
 	Make a CA certificate.
-	Returns the certificate, private key and public key.
+	Parameters:
+		bits = number of bits in RSA key
+	Return:
+		CA certificate, CA private key (EVP) and CA public key (EVP).
 	"""
-	req, pk = pki_request(1024)
-	pkey = req.get_pubkey()
+	req, pk = make_request(bits, "localhost")
+	puk = req.get_pubkey()
 	cert = X509.X509()
-	cert.set_serial_number(1)
+	cert.set_serial_number(1) # self signed certificate is first
 	cert.set_version(1)
-	pki_cert_valid(cert)
-	cert.set_issuer(pki_ca_issuer())
-	cert.set_subject(cert.get_issuer())
-	cert.set_pubkey(pkey)
-	cert.add_ext(X509.new_extension('basicConstraints', 'CA:TRUE'))
+	cert.set_issuer(issuer_name())
+	cert.set_subject(issuer_name()) # same issuer and subject in self signed certificate
+	cert.set_pubkey(puk)
+	cert.add_ext(X509.new_extension('basicConstraints', 'CA:TRUE')) # make it CA certificate
+	make_certificate_valid(cert, 365) # certificate is valid for 1 year
 	cert.sign(pk, 'sha256')
-	return cert, pk, pkey
+	return cert, pk, puk
 
-def pki_cert(serial_number):
+def make_certificate(serial_number):
 	"""
 	Make a certificate.
-	Returns a new cert.
+	Parameters:
+		serial_number = serial number of certificate
+	Return:
+		A new valid certificate to fill with data.
 	"""
 	cert = X509.X509()
 	cert.set_serial_number(serial_number)
 	cert.set_version(1)
-	pki_cert_valid(cert)
+	make_certificate_valid(cert, 365) # certificate is valid for 1 year
 	return cert
 
-# high-level functions - these are used
+# ==================================================
 
-def pki_ca_init(ca_cert_file, ca_pk_file, ca_puk_file):
+def pki_ca_init(ca_cert_loc, ca_pk_loc, ca_puk_loc):
 	"""
-	Create CA certificate, CA private key and CA public key.
-	Save them as files.
+	Create CA certificate, CA private key and CA public key. Save them as files.
+	Parameters:
+		ca_cert_loc = location of file to store CA certificate
+		ca_pk_loc = location of file to store CA private key
+		ca_puk_loc = location of file to store CA public key
+	Return:
+		none
 	"""
-	ca_cert, ca_pk, ca_puk = pki_cacert()
-	ca_cert.save_pem(ca_cert_file)
-	ca_pk.save_key(ca_pk_file, cipher = None, callback = lambda: None)
-	ca_puk.get_rsa().save_pub_key(ca_puk_file)
+	ca_cert, ca_pk, ca_puk = make_ca_certificate(1024)
+	ca_cert.save_pem(ca_cert_loc)
+	ca_pk.save_key(ca_pk_loc, cipher = None, callback = lambda: None)
+	ca_puk.get_rsa().save_pub_key(ca_puk_loc)
 
-def pki_request_certificate_from_ca(name, cert_req_file, pk_file):
+def pki_ca_issue_certificate(cert_req_loc, ca_pk_loc, serial_number, cert_loc):
 	"""
-	Call from a client. Name is an id string that will go into certificate.
-	Create a certificate request for CA and a private key.
-	Save them as files.
+	Issue certificate based on the request and save it as a file.
+	Serial number must not repeat in issued certificates.
+	Parameters:
+		cert_req_loc = location of file with certificate request
+		ca_pk_loc = location of file with CA private key
+		serial_number = serial number for the issued certificate
+		cert_loc = location of file to store issued certificate
+	Return:
+		none
 	"""
-	cert_req, pk = pki_request(1024, cn = name)
-	cert_req.save_pem(cert_req_file)
-	pk.save_key(pk_file, cipher = None, callback = lambda: None)
-
-def pki_ca_issue_certificate_on_request(cert_req_file, ca_pk_file, serial_number, cert_file):
-	"""
-	Call from CA.
-	Issue certificate based on the request. Serial number must not repeat in issued certificates.
-	Save it as a file.
-	"""
-	ca_pk = EVP.load_key(ca_pk_file)  # load EVP for signing certificates
-	cert_req = X509.load_request(cert_req_file)
-	cert = pki_cert(serial_number)
+	ca_pk = EVP.load_key(ca_pk_loc)  # load EVP for signing certificates
+	cert_req = X509.load_request(cert_req_loc)
+	cert = make_certificate(serial_number)
 	cert.set_subject(cert_req.get_subject())
 	cert.set_pubkey(cert_req.get_pubkey())
 	cert.sign(ca_pk, 'sha256')
-	cert.save_pem(cert_file)
+	cert.save_pem(cert_loc)
 
-def pki_verify_certificate(cert_file, ca_cert_file):
+def pki_request_certificate(id_name, cert_req_loc, pk_loc):
 	"""
-	Call from a client.
-	Verifies a client certificate by using CA certificate.
-	Returns 1 if client certificate is valid, 0 otherwise.
+	Create a certificate request with public key and get a private key.
+	Save certificate request and private key as files.
+	Parameters:
+		id_name = string to store as common name in certificate
+		cert_req_loc = location of file to store certificate request
+		pk_loc = location of file to store private key
+	Return:
+		none
 	"""
-	cert = X509.load_cert(cert_file)
-	ca_cert = X509.load_cert(ca_cert_file)
+	cert_req, pk = make_request(1024, cn = id_name)
+	cert_req.save_pem(cert_req_loc)
+	pk.save_key(pk_loc, cipher = None, callback = lambda: None)
+
+def pki_verify_certificate(cert_loc, ca_cert_loc):
+	"""
+	Verifies a certificate by using CA certificate.
+	Parameters:
+		cert_loc = location of file with certificate to verify
+		ca_cert_loc = location of file with CA certificate
+	Return:
+		1 if client certificate is valid, 0 otherwise.
+	"""
+	cert = X509.load_cert(cert_loc)
+	ca_cert = X509.load_cert(ca_cert_loc)
 	return cert.verify(ca_cert.get_pubkey())
 
-def pki_encrypt_with_private_key(message, pk_file):
+def pki_encrypt_with_certificate(message, cert_loc):
 	"""
-	Call from a client.
-	Encrypts a message using a private key, so it can be decrypted with a public key.
-	Returns encrypted message or string starting with "ERROR" in case of error.
+	Encrypt a message by using a public key (certificate) so it can be decrypted only with the matching private key.
+	Parameters:
+		message = message to encrypt
+		cert_loc = location of the file with certificate holding the public key
+	Return:
+		Encrypted message or string starting with "ERROR" in case of error.
 	"""
-	pk = RSA.load_key(pk_file) # load RSA for encryption
+	cert = X509.load_cert(cert_loc)
+	puk = cert.get_pubkey().get_rsa() # get RSA for encryption
 	message = base64.b64encode(message)
 	try:
-		encrypted = pk.private_encrypt(message, RSA.pkcs1_padding)
+		encrypted = puk.public_encrypt(message, RSA.pkcs1_padding)
 	except RSA.RSAError as e:
 		return "ERROR encrypting " + e.message
 	return encrypted
 
-def pki_decrypt_with_certificate(message, cert_file):
+def pki_decrypt_with_private_key(message, pk_loc):
 	"""
-	Call from a client.
-	Decrypts a message crypted with a private key by using a public key from a certificate.
-	Returns decrypted message or string starting with "ERROR" in case of error.
+	Decrypt a message encrypted with a public key by using the matching private key.
+	Parameters:
+		message = message to decrypt
+		pk_loc = location of the file with private key
+	Return:
+		Decrypted message or string starting with "ERROR" in case of error.
 	"""
-	cert = X509.load_cert(cert_file)
-	puk = cert.get_pubkey().get_rsa() # get RSA for decryption
+	pk = RSA.load_key(pk_loc) # load RSA for decryption
 	try:
-		decrypted = puk.public_decrypt(message, RSA.pkcs1_padding)
+		decrypted = pk.private_decrypt(message, RSA.pkcs1_padding)
 		decrypted = base64.b64decode(decrypted)
 	except RSA.RSAError as e:
 		return "ERROR decrypting " + e.message
 	return decrypted
 
+# ==================================================
 
-
-# ==========
-# EXAMPLE
-# ==========
+# =====
+# USAGE
+# =====
 
 # declare file locations
 
-ca_cert_file = "ca_cert.pem"
-ca_pk_file = "ca_pk.pem"
-ca_puk_file = "ca_puk.pem"
+cert_dir = "certs"
+if not os.path.exists(cert_dir):
+	os.makedirs(cert_dir)
 
-cert1_req_file = "cert1_req.pem"
-pk1_file = "pk1.pem"
-cert1_file = "cert1.pem"
+ca_cert = cert_dir + "/" + "ca_cert.pem"
+ca_pk = cert_dir + "/" + "ca_pk.pem"
+ca_puk = cert_dir + "/" + "ca_puk.pem"
 
-cert2_req_file = "cert2_req.pem"
-pk2_file = "pk2.pem"
-cert2_file = "cert2.pem"
+cert1_req = cert_dir + "/" + "cert1_req.pem"
+pk1 = cert_dir + "/" + "pk1.pem"
+cert1 = cert_dir + "/" + "cert1.pem"
+
+cert2_req = cert_dir + "/" + "cert2_req.pem"
+pk2 = cert_dir + "/" + "pk2.pem"
+cert2 = cert_dir + "/" + "cert2.pem"
 
 
 # first initialize CA, creating CA certificate, CA public and CA private key
-pki_ca_init(ca_cert_file, ca_pk_file, ca_puk_file)
+pki_ca_init(ca_cert, ca_pk, ca_puk)
 
-# then a client can request a certificate from CA, creating certificate request and client private key
-# client also receives CA certificate and stores it locally
-pki_request_certificate_from_ca("client1", cert1_req_file, pk1_file)
-pki_request_certificate_from_ca("client2", cert2_req_file, pk2_file)
+# a client can request a certificate from CA, creating certificate request and client private key
+pki_request_certificate("client1", cert1_req, pk1)
+pki_request_certificate("client2", cert2_req, pk2)
 
-# then CA approves and issues the certificate for client and also stores this certificate locally
-pki_ca_issue_certificate_on_request(cert1_req_file, ca_pk_file, 11, cert1_file)
-pki_ca_issue_certificate_on_request(cert2_req_file, ca_pk_file, 12, cert2_file)
+# CA approves and issues the certificate for client
+pki_ca_issue_certificate(cert1_req, ca_pk, 11, cert1)
+pki_ca_issue_certificate(cert2_req, ca_pk, 12, cert2)
 
 # a client can verify another client's certificate by using CA certificate
-print pki_verify_certificate(cert1_file, ca_cert_file)
-print pki_verify_certificate(cert2_file, ca_cert_file)
+print "verify client1 certificate: %d" % pki_verify_certificate(cert1, ca_cert)
+print "verify client2 certificate: %d" % pki_verify_certificate(cert2, ca_cert)
+print ""
 
-# testing encryption and decryption
+# test encryption and decryption
 print "original message:"
 message = "hello world"
-print message
+print message + "\n"
 
-# a message can be encryted with client private key (error is reported in the response)
-print "message encrypted by client1 private key:"
-encrypted1 = pki_encrypt_with_private_key(message, pk1_file)
-print encrypted1
+# client can encrypt a message with other client's public key from certificate
+print "message encrypted with client1 certificate:"
+encrypted1 = pki_encrypt_with_certificate(message, cert1)
+print encrypted1 + "\n"
 
-# a message can be decrypted with client certificate, more precisely with client public key (error is reported in the response)
-print "message decrypted by client1 certificate:"
-decrypted1 = pki_decrypt_with_certificate(encrypted1, cert1_file)
-print decrypted1
+# a message can be decrypted with client private key
+print "message decrypted with client1 private key:"
+decrypted1 = pki_decrypt_with_private_key(encrypted1, pk1)
+print decrypted1 + "\n"
 
-print "message decrypted by client2 certificate:"
-decrypted2 = pki_decrypt_with_certificate(encrypted1, cert2_file)
-print decrypted2
+# decrypting with wrong private key should fail
+print "message decrypted with client2 private key:"
+decrypted2 = pki_decrypt_with_private_key(encrypted1, pk2)
+print decrypted2 + "\n"
